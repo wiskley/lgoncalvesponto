@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+  <title>L GONÇALVES — Controle de Ponto</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            darkBg: "#0a0a0c",
+            cardBg: "#121216",
+            inputBg: "#18181c",
+            accentBlue: "#2563eb"
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+    * { box-sizing: border-box; }
+    html { background: #0a0a0c; scroll-behavior: smooth; }
+    body { margin: 0; font-family: Inter, sans-serif; background: #0a0a0c; color: #f4f4f5; -webkit-font-smoothing: antialiased; }
+    button, input, select, textarea { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    .glass { background: rgba(18, 18, 22, .78); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .fade-in { animation: fadeIn .25s ease forwards; }
+    .slide-up { animation: slideUp .28s ease forwards; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    .pulse-dot { animation: pulseDot 1.8s infinite; }
+    @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+    .terminal-input { letter-spacing: .35em; }
+    .terminal-input::placeholder { letter-spacing: .35em; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    @media print {
+      body { background: white !important; color: black !important; }
+      .no-print, aside, .mobile-nav { display: none !important; }
+      main { padding: 0 !important; }
+      .print-card { border: 0 !important; box-shadow: none !important; background: white !important; color: black !important; }
+      table { color: black !important; }
+      .print-hidden { display: none !important; }
+    }
+
+    @media (max-width: 767px) {
+      .mobile-bottom-space { padding-bottom: 92px; }
+    }
+  </style>
+</head>
+
+<body class="min-h-screen bg-darkBg text-zinc-100">
+
+  <div id="app"></div>
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+    import { getFirestore, collection, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, limit, writeBatch, Timestamp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCMTp66QNMval2OtEVGp11d2VOYH5Xzmpc",
+      authDomain: "lgoncalves-c1a3e.firebaseapp.com",
+      projectId: "lgoncalves-c1a3e",
+      storageBucket: "lgoncalves-c1a3e.firebasestorage.app",
+      messagingSenderId: "838969509051",
+      appId: "1:838969509051:web:9873206ab56e1cb520159e",
+      measurementId: "G-VS3PLPCXWQ"
+    };
+
+    const firebaseApp = initializeApp(firebaseConfig);
+    const auth = getAuth(firebaseApp);
+    const db = getFirestore(firebaseApp);
+    const analytics = getAnalytics(firebaseApp);
+
+    const state = {
+      employees: [],
+      records: [],
+      audit: [],
+      settings: {
+        companyName: "L Gonçalves Construtora & Obra",
+        cnpj: "",
+        timezone: "America/Sao_Paulo",
+        tolerance: 10
+      },
+      admin: null,
+      firebaseReady: true,
+      syncStatus: "Conectando..."
+    };
+
+    let currentRoute = "terminal";
+    let adminTab = "dashboard";
+    let filterEmp = "all";
+    let filterDate = "";
+    let reportMonth = getLocalMonth();
+
+    let unsubscribeEmployees = null;
+    let unsubscribeRecords = null;
+    let unsubscribeAudit = null;
+    let unsubscribeSettings = null;
+
+    function escapeHTML(value) {
+      return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    function generateId() {
+      return Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+
+    function getLocalDateKey(date = new Date()) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+
+    function getLocalMonth(date = new Date()) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      return `${y}-${m}`;
+    }
+
+    function getLocalTime(date = new Date()) {
+      return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "--";
+      let date = value instanceof Timestamp || value?.toDate ? value.toDate() : new Date(value);
+      if (isNaN(date.getTime())) return "--";
+      return date.toLocaleString("pt-BR");
+    }
+
+    function toDate(value) {
+      if (value instanceof Timestamp || value?.toDate) return value.toDate();
+      return new Date(value);
+    }
+
+    function getRecordDate(value) {
+      return getLocalDateKey(toDate(value));
+    }
+
+    function showToast(message, type = "success") {
+      const old = document.getElementById("global-toast");
+      if (old) old.remove();
+
+      const toast = document.createElement("div");
+      toast.id = "global-toast";
+      const success = type === "success";
+      toast.className = `fixed z-[9999] left-1/2 -translate-x-1/2 bottom-5 md:bottom-8 w-[calc(100%-32px)] max-w-md px-4 py-3 rounded-2xl border shadow-2xl glass text-sm font-medium fade-in ${success ? "border-emerald-500/30 text-emerald-300" : "border-red-500/30 text-red-300"}`;
+      toast.innerHTML = `<div class="flex items-center gap-3"><span class="text-lg">${success ? "✓" : "!"}</span><span>${escapeHTML(message)}</span></div>`;
+      document.body.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = "0";
+        setTimeout(() => toast.remove(), 250);
+      }, 3500);
+    }
+
+    function showTerminalFeedback(message, type) {
+      const element = document.getElementById("terminal-feedback");
+      if (!element) return;
+      element.classList.remove("hidden");
+      element.className = `p-4 rounded-2xl text-center text-sm font-medium fade-in ${type === "success" ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400" : "bg-red-500/10 border border-red-500/20 text-red-400"}`;
+      element.textContent = message;
+      setTimeout(() => element.classList.add("hidden"), 4500);
+    }
+
+    function navigate(route) {
+      currentRoute = route;
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function setAdminTab(tab) {
+      adminTab = tab;
+      render();
+    }
+
+    function getCurrentAdminName() {
+      return state.admin?.name || state.admin?.email || auth.currentUser?.email || "Administrador";
+    }
+
+    function startSettingsListener() {
+      if (unsubscribeSettings) unsubscribeSettings();
+      unsubscribeSettings = onSnapshot(doc(db, "settings", "general"), snapshot => {
+        if (snapshot.exists()) {
+          state.settings = { ...state.settings, ...snapshot.data() };
+        }
+        state.syncStatus = "Sincronizado";
+        if (currentRoute === "terminal" || currentRoute === "admin-dashboard") render();
+      }, error => {
+        console.error(error);
+        state.syncStatus = "Erro de conexão";
+        if (currentRoute === "terminal") render();
+      });
+    }
+
+    function startEmployeesListener() {
+      if (unsubscribeEmployees) unsubscribeEmployees();
+      unsubscribeEmployees = onSnapshot(collection(db, "employees"), snapshot => {
+        state.employees = snapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+        state.employees.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"));
+        state.syncStatus = "Sincronizado";
+        if (currentRoute === "admin-dashboard") render();
+      }, error => {
+        console.error(error);
+        state.syncStatus = "Erro de conexão";
+        if (currentRoute === "admin-dashboard") render();
+      });
+    }
+
+    function startAdminListeners() {
+      if (unsubscribeRecords) unsubscribeRecords();
+      if (unsubscribeAudit) unsubscribeAudit();
+
+      const recordsQuery = query(collection(db, "records"), orderBy("timestamp", "desc"), limit(1000));
+      unsubscribeRecords = onSnapshot(recordsQuery, snapshot => {
+        state.records = snapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+        if (currentRoute === "admin-dashboard") render();
+      }, error => {
+        console.error("Erro nos registros:", error);
+      });
+
+      const auditQuery = query(collection(db, "audit"), orderBy("timestamp", "desc"), limit(500));
+      unsubscribeAudit = onSnapshot(auditQuery, snapshot => {
+        state.audit = snapshot.docs.map(item => ({ id: item.id, ...item.data() }));
+        if (currentRoute === "admin-dashboard") render();
+      }, error => {
+        console.error("Erro na auditoria:", error);
+      });
+    }
+
+    function stopAdminListeners() {
+      if (unsubscribeRecords) { unsubscribeRecords(); unsubscribeRecords = null; }
+      if (unsubscribeAudit) { unsubscribeAudit(); unsubscribeAudit = null; }
+    }
+
+    onAuthStateChanged(auth, async user => {
+      if (!user) {
+        state.admin = null;
+        stopAdminListeners();
+        if (currentRoute === "admin-dashboard") navigate("admin-login");
+        return;
+      }
+      try {
+        const adminSnap = await getDoc(doc(db, "admins", user.uid));
+        if (!adminSnap.exists()) {
+          await signOut(auth);
+          state.admin = null;
+          showToast("Usuário autenticado, mas sem permissão de administrador.", "error");
+          navigate("admin-login");
+          return;
+        }
+        state.admin = { uid: user.uid, email: user.email, ...adminSnap.data() };
+        startAdminListeners();
+        if (currentRoute === "admin-login") navigate("admin-dashboard");
+        else render();
+      } catch (error) {
+        console.error(error);
+        await signOut(auth);
+        showToast("Não foi possível validar o administrador.", "error");
+        navigate("admin-login");
+      }
+    });
+
+    async function handleAdminLogin(event) {
+      event.preventDefault();
+      const email = document.getElementById("admin-email")?.value.trim();
+      const password = document.getElementById("admin-pass")?.value;
+      const button = event.submitter;
+      if (button) { button.disabled = true; button.textContent = "Entrando..."; }
+
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+      } catch (error) {
+        console.error(error);
+        let message = "E-mail ou senha incorretos.";
+        if (error.code === "auth/too-many-requests") message = "Muitas tentativas. Aguarde alguns minutos.";
+        if (error.code === "auth/network-request-failed") message = "Sem conexão com a internet.";
+
+        const element = document.getElementById("admin-login-error");
+        if (element) {
+          element.textContent = message;
+          element.classList.remove("hidden");
+        }
+        if (button) { button.disabled = false; button.textContent = "Entrar no Painel"; }
+      }
+    }
+
+    async function adminLogout() {
+      try {
+        await signOut(auth);
+        state.admin = null;
+        navigate("terminal");
+      } catch (error) {
+        console.error(error);
+        showToast("Não foi possível sair.", "error");
+      }
+    }
+
+    function renderTerminalPage() {
+      const company = state.settings.companyName || "L GONÇALVES";
+      return `
+        <div class="min-h-screen flex flex-col justify-between px-4 py-5 md:px-8 md:py-8">
+          <header class="flex items-center justify-between max-w-5xl mx-auto w-full">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-9 h-9 shrink-0 rounded-xl bg-blue-600 flex items-center justify-center font-bold text-white shadow-lg shadow-blue-600/20">L</div>
+              <div class="min-w-0">
+                <div class="font-bold text-sm md:text-base text-white truncate">${escapeHTML(company)}</div>
+                <div class="text-[10px] text-zinc-500">Controle de Ponto</div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div id="terminal-clock" class="text-xs md:text-sm font-mono font-bold text-blue-400">--/--/---- --:--:--</div>
+              <div class="text-[10px] text-zinc-500 flex items-center justify-end gap-1.5 mt-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+                ${escapeHTML(state.syncStatus)}
+              </div>
+            </div>
+          </header>
+
+          <main class="w-full max-w-md mx-auto my-auto py-10">
+            <div class="bg-cardBg border border-zinc-800/80 rounded-[28px] p-5 md:p-8 shadow-2xl shadow-black/30 slide-up">
+              <div class="text-center mb-7">
+                <div class="w-14 h-14 mx-auto rounded-2xl bg-blue-600/10 border border-blue-600/20 flex items-center justify-center mb-4">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-blue-400"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="9"/></svg>
+                </div>
+                <h1 class="text-xl md:text-2xl font-bold text-white">Registro de Ponto</h1>
+                <p class="text-xs md:text-sm text-zinc-500 mt-2">Digite seu código PIN de 4 dígitos</p>
+              </div>
+
+              <div id="terminal-feedback" class="hidden mb-5"></div>
+
+              <form onsubmit="handlePunchSubmit(event)" class="space-y-4">
+                <input id="punch-code-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" autofocus required class="terminal-input w-full bg-inputBg border border-zinc-800 rounded-2xl py-5 text-center text-3xl font-mono font-bold text-blue-400 placeholder:text-zinc-700 focus:outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-600/10 transition" placeholder="0000">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 active:scale-[.99] py-4 rounded-2xl text-sm font-bold text-white transition shadow-lg shadow-blue-600/20">Registrar Ponto</button>
+              </form>
+
+              <div class="flex items-center gap-3 my-6"><div class="h-px bg-zinc-800 flex-1"></div><span class="text-[10px] uppercase tracking-widest text-zinc-600">Terminal Oficial</span><div class="h-px bg-zinc-800 flex-1"></div></div>
+              <div class="text-center text-[11px] text-zinc-600">Dados sincronizados automaticamente com a nuvem.</div>
+            </div>
+          </main>
+
+          <footer class="text-center">
+            <button onclick="navigate('admin-login')" class="text-xs text-zinc-600 hover:text-zinc-300 transition underline underline-offset-4">Área do Administrador</button>
+          </footer>
+        </div>
+      `;
+    }
+
+    async function handlePunchSubmit(event) {
+      event.preventDefault();
+      const input = document.getElementById("punch-code-input");
+      if (!input) return;
+      const code = input.value.trim();
+
+      if (!/^\d{4}$/.test(code)) {
+        showTerminalFeedback("Digite exatamente 4 números.", "error");
+        input.value = "";
+        input.focus();
+        return;
+      }
+
+      input.disabled = true;
+
+      try {
+        const employeeRef = doc(db, "employees", code);
+        const now = Timestamp.now();
+        const today = getLocalDateKey(now.toDate());
+        let result = null;
+
+        await runTransaction(db, async transaction => {
+          const employeeSnap = await transaction.get(employeeRef);
+          if (!employeeSnap.exists()) throw new Error("EMPLOYEE_NOT_FOUND");
+
+          const employee = employeeSnap.data();
+          if (employee.active === false) throw new Error("EMPLOYEE_INACTIVE");
+
+          let count = Number(employee.punchCount || 0);
+          let punchDate = employee.punchDate || "";
+
+          if (punchDate !== today) {
+            count = 0;
+            punchDate = today;
+          }
+
+          if (count >= 4) throw new Error("DAY_COMPLETED");
+
+          const types = ["Entrada", "Intervalo", "Retorno", "Saída"];
+          const type = types[count];
+          const newCount = count + 1;
+
+          transaction.update(employeeRef, {
+            punchDate: today,
+            punchCount: newCount,
+            lastPunchType: type,
+            lastPunchAt: now
+          });
+
+          const recordRef = doc(collection(db, "records"));
+          transaction.set(recordRef, {
+            employeeId: code,
+            userId: code,
+            userName: employee.name || "",
+            cargo: employee.cargo || "",
+            setor: employee.setor || "",
+            code: code,
+            type: type,
+            timestamp: now,
+            source: "terminal"
+          });
+
+          result = { name: employee.name, type };
+        });
+
+        showTerminalFeedback(`✓ ${result.name} — ${result.type} registrada com sucesso!`, "success");
+        input.value = "";
+        setTimeout(() => input.focus(), 100);
+      } catch (error) {
+        console.error(error);
+        if (error.message === "EMPLOYEE_NOT_FOUND") showTerminalFeedback("Código PIN inválido ou funcionário não encontrado.", "error");
+        else if (error.message === "EMPLOYEE_INACTIVE") showTerminalFeedback("Este funcionário está desativado.", "error");
+        else if (error.message === "DAY_COMPLETED") showTerminalFeedback("A jornada de hoje já foi totalmente concluída.", "error");
+        else showTerminalFeedback("Não foi possível registrar o ponto. Verifique a conexão.", "error");
+
+        input.value = "";
+        input.focus();
+      } finally {
+        input.disabled = false;
+      }
+    }
+
+    function renderAdminLoginPage() {
+      return `
+        <div class="min-h-screen flex items-center justify-center px-4 py-8">
+          <div class="w-full max-w-md bg-cardBg border border-zinc-800/80 rounded-[28px] p-6 md:p-8 shadow-2xl slide-up">
+            <div class="text-center mb-8">
+              <div class="w-12 h-12 mx-auto rounded-2xl bg-blue-600 flex items-center justify-center font-bold text-white text-lg mb-4">L</div>
+              <h1 class="text-2xl font-bold text-white">L GONÇALVES</h1>
+              <p class="text-xs text-zinc-500 mt-1">Painel Administrativo</p>
+            </div>
+
+            <div id="admin-login-error" class="hidden mb-5 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-400 text-xs text-center font-medium"></div>
+
+            <form onsubmit="handleAdminLogin(event)" class="space-y-5">
+              <div>
+                <label class="block text-xs font-medium text-zinc-400 mb-2">E-mail</label>
+                <input id="admin-email" type="email" required autocomplete="username" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600 transition" placeholder="seu@email.com">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-zinc-400 mb-2">Senha</label>
+                <input id="admin-pass" type="password" required autocomplete="current-password" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600 transition" placeholder="••••••••">
+              </div>
+              <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl text-sm font-bold text-white transition">Entrar no Painel</button>
+            </form>
+
+            <div class="border-t border-zinc-800 mt-7 pt-5">
+              <button onclick="navigate('terminal')" class="w-full text-xs text-zinc-500 hover:text-white transition">← Voltar ao Terminal</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAdminDashboardView() {
+      if (!state.admin) return renderAdminLoginPage();
+
+      const employees = state.employees.filter(employee => employee.role !== "ADMIN");
+      const records = state.records;
+      const today = getLocalDateKey();
+      const todayIds = [...new Set(records.filter(record => getRecordDate(record.timestamp) === today).map(record => record.userId))];
+      const active = employees.filter(employee => employee.active !== false);
+      const present = todayIds.length;
+      const absent = Math.max(0, active.length - present);
+      const withoutExit = active.filter(employee => {
+        const recordsToday = records.filter(record => record.userId === employee.id && getRecordDate(record.timestamp) === today);
+        return recordsToday.some(record => record.type === "Entrada") && !recordsToday.some(record => record.type === "Saída");
+      });
+
+      return `
+        <div class="min-h-screen flex bg-darkBg">
+          ${renderDesktopSidebar()}
+          <main class="flex-1 min-w-0 p-4 md:p-8 pb-28 md:pb-8 overflow-x-hidden">
+            <div class="max-w-[1600px] mx-auto space-y-6">
+              <header class="no-print flex items-center justify-between gap-4">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 text-[10px] text-emerald-400 mb-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+                    ${escapeHTML(state.syncStatus)}
+                  </div>
+                  <h2 class="text-xl md:text-2xl font-bold text-white">Painel do Gestor</h2>
+                  <p id="admin-clock" class="text-xs text-zinc-500 mt-1">--/--/---- --:--:--</p>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                  <button onclick="openEmployeeEditor()" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 md:px-4 py-2.5 rounded-xl transition">
+                    <span class="hidden sm:inline">+ Funcionário</span>
+                    <span class="sm:hidden">+ Novo</span>
+                  </button>
+                  <button onclick="adminLogout()" class="md:hidden bg-zinc-800 text-xs px-3 py-2.5 rounded-xl">Sair</button>
+                </div>
+              </header>
+
+              ${adminTab === "dashboard" ? renderDashboardTab(active.length, present, absent, withoutExit) : ""}
+              ${adminTab === "employees" ? renderEmployeesTab(employees, records) : ""}
+              ${adminTab === "records" ? renderRecordsTab(employees, records) : ""}
+              ${adminTab === "audit" ? renderAuditTab(state.audit) : ""}
+              ${adminTab === "settings" ? renderSettingsTab(state.settings) : ""}
+              ${adminTab === "updates" ? renderUpdatesTab() : ""}
+            </div>
+          </main>
+          ${renderMobileNavigation()}
+        </div>
+      `;
+    }
+
+    function renderDesktopSidebar() {
+      return `
+        <aside class="no-print hidden md:flex flex-col w-64 shrink-0 bg-cardBg border-r border-zinc-800/80 p-5">
+          <button onclick="navigate('terminal')" class="flex items-center gap-3 text-left mb-8">
+            <div class="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center font-bold text-white">L</div>
+            <div>
+              <div class="text-sm font-bold text-white">L GONÇALVES</div>
+              <div class="text-[10px] text-zinc-500">Controle de Ponto</div>
+            </div>
+          </button>
+          <nav class="space-y-1 flex-1">
+            ${navButton("dashboard", "Dashboard & Alertas", "▦")}
+            ${navButton("employees", "Colaboradores", "♙")}
+            ${navButton("records", "Registros & Relatórios", "◷")}
+            ${navButton("audit", "Histórico de Ajustes", "≡")}
+            ${navButton("settings", "Configurações", "⚙")}
+            ${navButton("updates", "Atualizações", "↻")}
+          </nav>
+          <div class="border-t border-zinc-800 pt-4 space-y-2">
+            <button onclick="exportBackup()" class="w-full text-left px-3 py-2.5 rounded-xl text-xs text-blue-400 bg-blue-600/10 hover:bg-blue-600/15">↓ Baixar Backup</button>
+            <label class="block w-full text-center px-3 py-2.5 rounded-xl text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 cursor-pointer">
+              ↑ Restaurar Backup
+              <input type="file" accept=".json" onchange="importBackup(event)" class="hidden">
+            </label>
+            <button onclick="adminLogout()" class="w-full text-left px-3 py-2.5 rounded-xl text-xs text-red-400 hover:bg-red-500/10">Sair do Painel</button>
+          </div>
+        </aside>
+      `;
+    }
+
+    function navButton(tab, label, icon) {
+      return `
+        <button onclick="setAdminTab('${tab}')" class="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-xs transition ${adminTab === tab ? "bg-blue-600/10 text-blue-400" : "text-zinc-500 hover:text-white hover:bg-zinc-800/50"}">
+          <span class="w-5 text-center text-sm">${icon}</span>
+          <span>${label}</span>
+        </button>
+      `;
+    }
+
+    function renderMobileNavigation() {
+      return `
+        <nav class="mobile-nav md:hidden no-print fixed bottom-0 left-0 right-0 z-50 bg-[#101014]/95 backdrop-blur-xl border-t border-zinc-800 px-2 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))]">
+          <div class="grid grid-cols-6 gap-1">
+            ${mobileNavButton("dashboard", "Início", "⌂")}
+            ${mobileNavButton("employees", "Equipe", "♙")}
+            ${mobileNavButton("records", "Pontos", "◷")}
+            ${mobileNavButton("audit", "Histórico", "≡")}
+            ${mobileNavButton("settings", "Config.", "⚙")}
+            ${mobileNavButton("updates", "Versão", "↻")}
+          </div>
+        </nav>
+      `;
+    }
+
+    function mobileNavButton(tab, label, icon) {
+      return `
+        <button onclick="setAdminTab('${tab}')" class="flex flex-col items-center justify-center gap-1 py-2 rounded-xl transition ${adminTab === tab ? "text-blue-400 bg-blue-600/10" : "text-zinc-600"}">
+          <span class="text-base">${icon}</span>
+          <span class="text-[9px]">${label}</span>
+        </button>
+      `;
+    }
+
+    function renderDashboardTab(total, present, absent, withoutExit) {
+      return `
+        <section class="space-y-6 fade-in">
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+            ${dashboardCard("Funcionários Ativos", total, "text-white")}
+            ${dashboardCard("Presentes Hoje", present, "text-emerald-400")}
+            ${dashboardCard("Ausentes / Sem Ponto", absent, "text-amber-400")}
+            ${dashboardCard("Sem Saída", withoutExit.length, "text-red-400")}
+          </div>
+
+          ${withoutExit.length ? `
+            <div class="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-5">
+              <div class="flex items-center gap-2 text-sm font-bold text-amber-400">
+                <span>!</span> Funcionários sem saída hoje
+              </div>
+              <div class="flex flex-wrap gap-2 mt-4">
+                ${withoutExit.map(employee => `<span class="bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs px-3 py-1.5 rounded-full">${escapeHTML(employee.name)}</span>`).join("")}
+              </div>
+            </div>
+          ` : ""}
+
+          <div class="bg-cardBg border border-zinc-800/80 rounded-2xl p-5 md:p-6">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-bold text-white">Visão Geral da Obra</h3>
+                <p class="text-xs text-zinc-500 mt-1">Sistema sincronizado em tempo real</p>
+              </div>
+              <div class="text-[10px] px-2.5 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400">ONLINE</div>
+            </div>
+            <div class="grid md:grid-cols-3 gap-3 mt-5">
+              <div class="bg-inputBg rounded-xl p-4">
+                <div class="text-[10px] text-zinc-600">Banco</div>
+                <div class="text-xs font-medium text-zinc-300 mt-1">Firebase Firestore</div>
+              </div>
+              <div class="bg-inputBg rounded-xl p-4">
+                <div class="text-[10px] text-zinc-600">Sincronização</div>
+                <div class="text-xs font-medium text-emerald-400 mt-1">Tempo real</div>
+              </div>
+              <div class="bg-inputBg rounded-xl p-4">
+                <div class="text-[10px] text-zinc-600">Registros</div>
+                <div class="text-xs font-medium text-zinc-300 mt-1">${state.records.length}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function dashboardCard(title, value, color) {
+      return `
+        <div class="bg-cardBg border border-zinc-800/80 rounded-2xl p-4 md:p-5">
+          <div class="text-[10px] md:text-xs text-zinc-500">${title}</div>
+          <div class="text-2xl md:text-3xl font-bold font-mono mt-2 ${color}">${value}</div>
+        </div>
+      `;
+    }
+
+    function renderEmployeesTab(employees, records) {
+      const today = getLocalDateKey();
+      return `
+        <section class="space-y-5 fade-in">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 class="text-base font-bold text-white">Colaboradores</h3>
+              <p class="text-xs text-zinc-500 mt-1">Funcionários e horários de hoje</p>
+            </div>
+            <button onclick="openEmployeeEditor()" class="bg-blue-600 text-white text-xs font-bold px-4 py-2.5 rounded-xl">+ Novo Funcionário</button>
+          </div>
+
+          <!-- DESKTOP -->
+          <div class="hidden md:block bg-cardBg border border-zinc-800/80 rounded-2xl overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left">
+                <thead class="bg-inputBg text-[10px] text-zinc-500 uppercase">
+                  <tr>
+                    <th class="p-4">PIN</th>
+                    <th class="p-4">Nome</th>
+                    <th class="p-4">Entrada</th>
+                    <th class="p-4">Saída</th>
+                    <th class="p-4">Status</th>
+                    <th class="p-4 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-zinc-800/60">
+                  ${employees.length ? employees.map(employee => renderEmployeeRow(employee, records, today)).join("") : `<tr><td colspan="6" class="p-10 text-center text-xs text-zinc-600">Nenhum funcionário cadastrado.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- MOBILE -->
+          <div class="md:hidden space-y-3">
+            ${employees.length ? employees.map(employee => renderEmployeeCard(employee, records, today)).join("") : `<div class="bg-cardBg border border-zinc-800 rounded-2xl p-8 text-center text-xs text-zinc-600">Nenhum funcionário cadastrado.</div>`}
+          </div>
+        </section>
+      `;
+    }
+
+    function getTodayEmployeeRecord(employee, records, type) {
+      return records.find(record => record.userId === employee.id && getRecordDate(record.timestamp) === getLocalDateKey() && record.type === type);
+    }
+
+    function renderEmployeeRow(employee, records, today) {
+      const entry = getTodayEmployeeRecord(employee, records, "Entrada");
+      const exit = getTodayEmployeeRecord(employee, records, "Saída");
+
+      return `
+        <tr class="hover:bg-zinc-800/20">
+          <td class="p-4 font-mono font-bold text-blue-400">${escapeHTML(employee.code)}</td>
+          <td class="p-4">
+            <div class="font-medium text-sm text-white">${escapeHTML(employee.name)}</div>
+            <div class="text-[10px] text-zinc-600 mt-0.5">${escapeHTML(employee.cargo || "")}</div>
+          </td>
+          <td class="p-4 font-mono text-xs text-zinc-300">
+            ${entry ? getLocalTime(toDate(entry.timestamp)) : "--:--"}
+            <button onclick="quickEditDayTime('${employee.id}', 'Entrada')" class="ml-1 text-[10px] text-zinc-600 underline">Editar</button>
+          </td>
+          <td class="p-4 font-mono text-xs text-zinc-300">
+            ${exit ? getLocalTime(toDate(exit.timestamp)) : "--:--"}
+            <button onclick="quickEditDayTime('${employee.id}', 'Saída')" class="ml-1 text-[10px] text-zinc-600 underline">Editar</button>
+          </td>
+          <td class="p-4">
+            <span class="text-[10px] px-2 py-1 rounded-full ${employee.active === false ? "bg-red-500/10 text-red-400" : "bg-emerald-500/10 text-emerald-400"}">
+              ${employee.active === false ? "Desativado" : "Ativo"}
+            </span>
+          </td>
+          <td class="p-4 text-right whitespace-nowrap">
+            <button onclick="openEmployeeEditor('${employee.id}')" class="bg-zinc-800 text-zinc-200 text-[10px] px-3 py-2 rounded-lg">Editar</button>
+            <button onclick="toggleEmployeeStatus('${employee.id}')" class="bg-zinc-800 text-zinc-400 text-[10px] px-3 py-2 rounded-lg ml-1">${employee.active === false ? "Ativar" : "Desativar"}</button>
+          </td>
+        </tr>
+      `;
+    }
+
+    function renderEmployeeCard(employee, records) {
+      const entry = getTodayEmployeeRecord(employee, records, "Entrada");
+      const exit = getTodayEmployeeRecord(employee, records, "Saída");
+
+      return `
+        <div class="bg-cardBg border border-zinc-800/80 rounded-2xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-white truncate">${escapeHTML(employee.name)}</div>
+              <div class="text-[10px] text-zinc-600 mt-1">${escapeHTML(employee.cargo || "Sem cargo")}</div>
+            </div>
+            <div class="text-[10px] px-2 py-1 rounded-full shrink-0 ${employee.active === false ? "bg-red-500/10 text-red-400" : "bg-emerald-500/10 text-emerald-400"}">
+              ${employee.active === false ? "Desativado" : "Ativo"}
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mt-4">
+            <div class="bg-inputBg rounded-xl p-3">
+              <div class="text-[9px] text-zinc-600 uppercase">PIN</div>
+              <div class="font-mono text-sm font-bold text-blue-400 mt-1">${escapeHTML(employee.code)}</div>
+            </div>
+            <div class="bg-inputBg rounded-xl p-3">
+              <div class="text-[9px] text-zinc-600 uppercase">Setor</div>
+              <div class="text-xs text-zinc-300 mt-1 truncate">${escapeHTML(employee.setor || "--")}</div>
+            </div>
+            <div class="bg-inputBg rounded-xl p-3">
+              <div class="text-[9px] text-zinc-600 uppercase">Entrada</div>
+              <div class="font-mono text-sm text-zinc-200 mt-1">${entry ? getLocalTime(toDate(entry.timestamp)) : "--:--"}</div>
+            </div>
+            <div class="bg-inputBg rounded-xl p-3">
+              <div class="text-[9px] text-zinc-600 uppercase">Saída</div>
+              <div class="font-mono text-sm text-zinc-200 mt-1">${exit ? getLocalTime(toDate(exit.timestamp)) : "--:--"}</div>
+            </div>
+          </div>
+          <div class="flex gap-2 mt-4">
+            <button onclick="openEmployeeEditor('${employee.id}')" class="flex-1 bg-zinc-800 text-zinc-200 text-xs py-2.5 rounded-xl">Editar</button>
+            <button onclick="toggleEmployeeStatus('${employee.id}')" class="flex-1 bg-zinc-800 text-zinc-400 text-xs py-2.5 rounded-xl">${employee.active === false ? "Ativar" : "Desativar"}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function getFilteredRecords() {
+      let filtered = [...state.records];
+      if (filterEmp !== "all") {
+        filtered = filtered.filter(record => record.userId === filterEmp);
+      }
+      if (filterDate) {
+        filtered = filtered.filter(record => getRecordDate(record.timestamp) === filterDate);
+      } else if (reportMonth) {
+        filtered = filtered.filter(record => {
+          const date = toDate(record.timestamp);
+          return getLocalMonth(date) === reportMonth;
+        });
+      }
+      return filtered;
+    }
+
+    function renderRecordsTab(employees, records) {
+      const filtered = getFilteredRecords();
+      return `
+        <section class="space-y-5 fade-in">
+          <div class="no-print bg-cardBg border border-zinc-800/80 rounded-2xl p-4 md:p-5">
+            <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+              <div>
+                <h3 class="text-base font-bold text-white">Registros & Relatórios</h3>
+                <p class="text-xs text-zinc-500 mt-1">${filtered.length} registro(s) encontrado(s)</p>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 w-full lg:w-auto">
+                <select onchange="filterEmp=this.value;render()" class="bg-inputBg border border-zinc-800 px-3 py-2.5 rounded-xl text-xs text-white min-w-0">
+                  <option value="all">Todos os funcionários</option>
+                  ${employees.map(employee => `<option value="${escapeHTML(employee.id)}" ${filterEmp === employee.id ? "selected" : ""}>${escapeHTML(employee.name)}</option>`).join("")}
+                </select>
+                <input type="date" value="${filterDate}" onchange="filterDate=this.value;render()" class="bg-inputBg border border-zinc-800 px-3 py-2.5 rounded-xl text-xs text-white">
+                <input type="month" value="${reportMonth}" onchange="reportMonth=this.value;render()" class="bg-inputBg border border-zinc-800 px-3 py-2.5 rounded-xl text-xs text-white">
+                <button onclick="generatePDF('day')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2.5 rounded-xl text-xs font-medium">PDF Dia</button>
+                <button onclick="generatePDF('month')" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2.5 rounded-xl text-xs font-medium">PDF Mês</button>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-4">
+              <button onclick="openRecordEditor()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded-xl text-xs">+ Adicionar Ponto</button>
+              <button onclick="filterDate='';render()" class="bg-zinc-800 text-zinc-500 px-3 py-2 rounded-xl text-xs">Limpar filtro de data</button>
+            </div>
+          </div>
+
+          <div class="print-card bg-cardBg border border-zinc-800/80 rounded-2xl overflow-hidden">
+            <div class="p-5 md:p-6 border-b border-zinc-800">
+              <div class="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                <div>
+                  <h2 class="text-lg md:text-xl font-bold text-white">${escapeHTML(state.settings.companyName || "L GONÇALVES")}</h2>
+                  <p class="text-xs text-zinc-500 mt-1">Relatório Consolidado de Jornada de Trabalho</p>
+                </div>
+                <div class="text-xs text-zinc-500 md:text-right">
+                  <div>CNPJ: ${escapeHTML(state.settings.cnpj || "--")}</div>
+                  <div class="mt-1">Emitido em: ${new Date().toLocaleDateString("pt-BR")}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- DESKTOP TABLE -->
+            <div class="hidden md:block overflow-x-auto">
+              <table class="w-full text-left">
+                <thead class="bg-inputBg text-[10px] text-zinc-500 uppercase">
+                  <tr>
+                    <th class="p-3">Funcionário</th>
+                    <th class="p-3">Tipo</th>
+                    <th class="p-3">Data e Hora</th>
+                    <th class="p-3">Status</th>
+                    <th class="p-3 text-right no-print">Ações</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-zinc-800/60">
+                  ${filtered.length ? filtered.map(record => renderRecordRow(record)).join("") : `<tr><td colspan="5" class="p-12 text-center text-xs text-zinc-600">Nenhum registro encontrado.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- MOBILE -->
+            <div class="md:hidden p-3 space-y-2">
+              ${filtered.length ? filtered.map(record => renderRecordCard(record)).join("") : `<div class="p-10 text-center text-xs text-zinc-600">Nenhum registro encontrado.</div>`}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function getRecordStatus(record) {
+      const date = toDate(record.timestamp);
+      if (record.type === "Entrada") {
+        const tolerance = Number(state.settings.tolerance ?? 10);
+        const limitMinutes = 8 * 60 + tolerance;
+        const currentMinutes = date.getHours() * 60 + date.getMinutes();
+        return currentMinutes > limitMinutes ? { text: "Atrasado", class: "bg-red-500/10 text-red-400" } : { text: "No horário", class: "bg-emerald-500/10 text-emerald-400" };
+      }
+      if (record.type === "Saída" && date.getHours() >= 18) {
+        return { text: "Hora Extra", class: "bg-blue-500/10 text-blue-400" };
+      }
+      return { text: "Normal", class: "bg-zinc-500/10 text-zinc-400" };
+    }
+
+    function renderRecordRow(record) {
+      const status = getRecordStatus(record);
+      const date = toDate(record.timestamp);
+      return `
+        <tr class="hover:bg-zinc-800/20">
+          <td class="p-3 text-sm font-medium text-white">${escapeHTML(record.userName)}</td>
+          <td class="p-3"><span class="bg-blue-500/10 text-blue-400 text-[10px] px-2 py-1 rounded-full">${escapeHTML(record.type)}</span></td>
+          <td class="p-3 font-mono text-xs text-zinc-400">${date.toLocaleString("pt-BR")}</td>
+          <td class="p-3"><span class="text-[10px] px-2 py-1 rounded ${status.class}">${status.text}</span></td>
+          <td class="p-3 text-right no-print whitespace-nowrap">
+            <button onclick="openRecordEditor('${record.id}')" class="bg-blue-600/10 text-blue-400 text-[10px] px-2.5 py-2 rounded-lg">Editar</button>
+            <button onclick="deleteRecord('${record.id}')" class="bg-red-500/10 text-red-400 text-[10px] px-2.5 py-2 rounded-lg ml-1">Excluir</button>
+          </td>
+        </tr>
+      `;
+    }
+
+    function renderRecordCard(record) {
+      const status = getRecordStatus(record);
+      return `
+        <div class="bg-inputBg border border-zinc-800 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-sm font-semibold text-white">${escapeHTML(record.userName)}</div>
+              <div class="text-[10px] text-zinc-600 mt-1">PIN ${escapeHTML(record.code || record.userId || "--")}</div>
+            </div>
+            <span class="text-[10px] px-2 py-1 rounded-full bg-blue-500/10 text-blue-400">${escapeHTML(record.type)}</span>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-4">
+            <div>
+              <div class="font-mono text-sm text-zinc-200">${formatDateTime(record.timestamp)}</div>
+              <div class="mt-2"><span class="text-[10px] px-2 py-1 rounded ${status.class}">${status.text}</span></div>
+            </div>
+            <div class="flex flex-col gap-2 shrink-0 no-print">
+              <button onclick="openRecordEditor('${record.id}')" class="bg-blue-600/10 text-blue-400 text-[10px] px-3 py-2 rounded-lg">Editar</button>
+              <button onclick="deleteRecord('${record.id}')" class="bg-red-500/10 text-red-400 text-[10px] px-3 py-2 rounded-lg">Excluir</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAuditTab(logs) {
+      return `
+        <section class="space-y-5 fade-in">
+          <div>
+            <h3 class="text-base font-bold text-white">Histórico de Ajustes</h3>
+            <p class="text-xs text-zinc-500 mt-1">Registro das alterações realizadas pelo administrador.</p>
+          </div>
+          <div class="bg-cardBg border border-zinc-800/80 rounded-2xl overflow-hidden">
+            ${logs.length ? logs.map(log => `
+              <div class="p-4 md:p-5 border-b border-zinc-800/60 last:border-0">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                  <div class="text-xs font-semibold text-white">${escapeHTML(log.adminName)}</div>
+                  <div class="text-[10px] font-mono text-zinc-600">${formatDateTime(log.timestamp)}</div>
+                </div>
+                <div class="text-xs text-zinc-400 mt-2 leading-relaxed">${escapeHTML(log.description)}</div>
+              </div>
+            `).join("") : `<div class="p-10 text-center text-xs text-zinc-600">Nenhum ajuste registrado.</div>`}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderSettingsTab(settings) {
+      return `
+        <section class="max-w-2xl mx-auto space-y-5 fade-in">
+          <div>
+            <h3 class="text-base font-bold text-white">Configurações</h3>
+            <p class="text-xs text-zinc-500 mt-1">Informações utilizadas no sistema e nos relatórios.</p>
+          </div>
+          <div class="bg-cardBg border border-zinc-800/80 rounded-2xl p-5 md:p-6">
+            <form onsubmit="saveCompanySettings(event)" class="space-y-5">
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Nome da Empresa / Obra</label>
+                <input id="set-company-name" value="${escapeHTML(settings.companyName || "")}" required class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600">
+              </div>
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">CNPJ</label>
+                <input id="set-cnpj" value="${escapeHTML(settings.cnpj || "")}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600">
+              </div>
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Fuso Horário</label>
+                <input id="set-timezone" value="${escapeHTML(settings.timezone || "America/Sao_Paulo")}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600">
+              </div>
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Tolerância de Atraso (minutos)</label>
+                <input id="set-tolerance" type="number" min="0" max="120" value="${Number(settings.tolerance ?? 10)}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600">
+              </div>
+              <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-xl text-sm font-bold">Salvar Configurações</button>
+            </form>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderUpdatesTab() {
+      return `
+        <section class="max-w-3xl mx-auto space-y-5 fade-in">
+          <div class="bg-cardBg border border-zinc-800/80 rounded-2xl p-5 md:p-6">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h3 class="text-lg font-bold text-white">Central de Atualizações</h3>
+                <p class="text-xs text-zinc-500 mt-1">Sistema conectado ao Firebase.</p>
+              </div>
+              <span class="text-[10px] px-2.5 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400">ONLINE</span>
+            </div>
+            <div class="bg-inputBg border border-zinc-800 rounded-2xl p-5 mt-6">
+              <div class="text-[10px] text-zinc-600 uppercase">Versão instalada</div>
+              <div class="text-2xl font-bold text-blue-400 mt-1">v3.0.0</div>
+              <div class="text-xs text-zinc-500 mt-3">Firebase + Firestore + Authentication</div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function openEmployeeEditor(employeeId = null) {
+      const employee = employeeId ? state.employees.find(item => item.id === employeeId) : null;
+      const modal = document.createElement("div");
+      modal.id = "modal-container";
+      modal.className = `fixed inset-0 z-[500] bg-black/70 backdrop-blur-sm flex items-end md:items-center justify-center p-0 md:p-4 fade-in`;
+      modal.innerHTML = `
+        <div class="w-full max-w-lg bg-cardBg border border-zinc-800 rounded-t-[28px] md:rounded-[28px] shadow-2xl slide-up max-h-[92vh] overflow-y-auto">
+          <div class="p-5 md:p-6 border-b border-zinc-800 flex items-center justify-between">
+            <div>
+              <h3 class="text-lg font-bold text-white">${employee ? "Editar Funcionário" : "Novo Funcionário"}</h3>
+              <p class="text-xs text-zinc-500 mt-1">Cadastro do colaborador</p>
+            </div>
+            <button onclick="closeModal()" class="w-9 h-9 rounded-xl bg-zinc-800 text-zinc-400">×</button>
+          </div>
+          <form onsubmit="saveEmployee(event, '${employee?.id || ""}')" class="p-5 md:p-6 space-y-4">
+            <div>
+              <label class="block text-xs text-zinc-500 mb-2">Nome completo</label>
+              <input id="employee-name" required value="${escapeHTML(employee?.name || "")}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600" placeholder="Nome do funcionário">
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-2">PIN de 4 dígitos</label>
+              <input id="employee-code" required maxlength="4" inputmode="numeric" pattern="[0-9]{4}" value="${escapeHTML(employee?.code || "")}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm font-mono text-blue-400 focus:outline-none focus:border-blue-600" placeholder="0000">
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Cargo</label>
+                <input id="employee-cargo" value="${escapeHTML(employee?.cargo || "")}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600" placeholder="Cargo">
+              </div>
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Setor</label>
+                <input id="employee-setor" value="${escapeHTML(employee?.setor || "")}" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600" placeholder="Setor">
+              </div>
+            </div>
+            <label class="flex items-center justify-between bg-inputBg border border-zinc-800 rounded-xl p-4 cursor-pointer">
+              <div>
+                <div class="text-xs font-medium text-white">Funcionário ativo</div>
+                <div class="text-[10px] text-zinc-600 mt-1">Permite registrar ponto pelo terminal.</div>
+              </div>
+              <input id="employee-active" type="checkbox" ${employee?.active !== false ? "checked" : ""} class="w-5 h-5 accent-blue-600">
+            </label>
+            <div class="flex gap-2 pt-2">
+              <button type="button" onclick="closeModal()" class="flex-1 bg-zinc-800 text-zinc-300 py-3 rounded-xl text-sm">Cancelar</button>
+              <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl text-sm font-bold">Salvar</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    async function saveEmployee(event, oldId) {
+      event.preventDefault();
+      const name = document.getElementById("employee-name").value.trim();
+      const code = document.getElementById("employee-code").value.trim();
+      const cargo = document.getElementById("employee-cargo").value.trim();
+      const setor = document.getElementById("employee-setor").value.trim();
+      const active = document.getElementById("employee-active").checked;
+
+      if (!/^\d{4}$/.test(code)) {
+        showToast("O PIN precisa ter exatamente 4 números.", "error");
+        return;
+      }
+
+      const duplicate = state.employees.find(employee => employee.code === code && employee.id !== oldId);
+      if (duplicate) {
+        showToast("Este PIN já está sendo utilizado.", "error");
+        return;
+      }
+
+      try {
+        const data = {
+          id: code,
+          code,
+          name,
+          cargo,
+          setor,
+          role: "EMPLOYEE",
+          active,
+          punchDate: "",
+          punchCount: 0,
+          lastPunchType: "",
+          lastPunchAt: null
+        };
+
+        if (oldId) {
+          const oldEmployee = state.employees.find(employee => employee.id === oldId);
+          if (!oldEmployee) throw new Error("Funcionário não encontrado.");
+
+          data.punchDate = oldEmployee.punchDate || "";
+          data.punchCount = Number(oldEmployee.punchCount || 0);
+          data.lastPunchType = oldEmployee.lastPunchType || "";
+          data.lastPunchAt = oldEmployee.lastPunchAt || null;
+
+          if (oldId !== code) {
+            await setDoc(doc(db, "employees", code), data);
+            await deleteDoc(doc(db, "employees", oldId));
+          } else {
+            await setDoc(doc(db, "employees", code), data);
+          }
+
+          await addAudit(`Editou os dados do funcionário ${name}.`);
+          showToast("Funcionário atualizado com sucesso.");
+        } else {
+          await setDoc(doc(db, "employees", code), data);
+          await addAudit(`Cadastrou o funcionário ${name} (PIN: ${code}).`);
+          showToast("Funcionário cadastrado com sucesso.");
+        }
+        closeModal();
+      } catch (error) {
+        console.error(error);
+        showToast("Não foi possível salvar o funcionário.", "error");
+      }
+    }
+
+    async function toggleEmployeeStatus(employeeId) {
+      const employee = state.employees.find(item => item.id === employeeId);
+      if (!employee) return;
+      const newStatus = employee.active === false;
+
+      try {
+        await updateDoc(doc(db, "employees", employeeId), { active: newStatus });
+        await addAudit(`${newStatus ? "Ativou" : "Desativou"} o funcionário ${employee.name}.`);
+        showToast(newStatus ? "Funcionário ativado." : "Funcionário desativado.");
+      } catch (error) {
+        console.error(error);
+        showToast("Não foi possível alterar o status.", "error");
+      }
+    }
+
+    function openRecordEditor(recordId = null, defaults = {}) {
+      const record = recordId ? state.records.find(item => item.id === recordId) : null;
+      const employees = [...state.employees];
+      if (!employees.length) {
+        showToast("Cadastre um funcionário primeiro.", "error");
+        return;
+      }
+
+      let selectedEmployee = record?.userId || defaults.userId || employees[0].id;
+      let date = record ? getLocalDateKey(toDate(record.timestamp)) : defaults.date || getLocalDateKey();
+      let time = record ? getLocalTime(toDate(record.timestamp)) : defaults.time || getLocalTime();
+
+      const modal = document.createElement("div");
+      modal.id = "modal-container";
+      modal.className = `fixed inset-0 z-[500] bg-black/70 backdrop-blur-sm flex items-end md:items-center justify-center p-0 md:p-4 fade-in`;
+      modal.innerHTML = `
+        <div class="w-full max-w-lg bg-cardBg border border-zinc-800 rounded-t-[28px] md:rounded-[28px] shadow-2xl slide-up max-h-[92vh] overflow-y-auto">
+          <div class="p-5 md:p-6 border-b border-zinc-800 flex items-center justify-between">
+            <div>
+              <h3 class="text-lg font-bold text-white">${record ? "Editar Registro" : "Adicionar Ponto"}</h3>
+              <p class="text-xs text-zinc-500 mt-1">Data, horário e tipo da batida</p>
+            </div>
+            <button onclick="closeModal()" class="w-9 h-9 rounded-xl bg-zinc-800 text-zinc-400">×</button>
+          </div>
+          <form onsubmit="saveRecordFromModal(event, '${record?.id || ""}')" class="p-5 md:p-6 space-y-4">
+            <div>
+              <label class="block text-xs text-zinc-500 mb-2">Funcionário</label>
+              <select id="record-employee" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600">
+                ${employees.map(employee => `<option value="${escapeHTML(employee.id)}" ${employee.id === selectedEmployee ? "selected" : ""}>${escapeHTML(employee.name)} — PIN${escapeHTML(employee.code)}</option>`).join("")}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-2">Tipo de ponto</label>
+              <select id="record-type" class="w-full bg-inputBg border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-600">
+                ${["Entrada", "Intervalo", "Retorno", "Saída"].map(type => `<option value="${type}" ${(record?.type \vert{}\vert{} defaults.type \vert{}\vert{} "Entrada") === type ? "selected" : ""}>${type}</option>`).join("")}
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Data</label>
+                <input id="record-date" type="date" value="${date}" required class="w-full bg-inputBg border border-zinc-800 rounded-xl px-3 py-3 text-xs text-white focus:outline-none focus:border-blue-600">
+              </div>
+              <div>
+                <label class="block text-xs text-zinc-500 mb-2">Horário</label>
+                <input id="record-time" type="time" value="${time}" required class="w-full bg-inputBg border border-zinc-800 rounded-xl px-3 py-3 text-xs text-white focus:outline-none focus:border-blue-600">
+              </div>
+            </div>
+            <div class="flex gap-2 pt-2">
+              <button type="button" onclick="closeModal()" class="flex-1 bg-zinc-800 text-zinc-300 py-3 rounded-xl text-sm">Cancelar</button>
+              <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl text-sm font-bold">Salvar Registro</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    async function saveRecordFromModal(event, recordId) {
+      event.preventDefault();
+      const employeeId = document.getElementById("record-employee").value;
+      const type = document.getElementById("record-type").value;
+      const date = document.getElementById("record-date").value;
+      const time = document.getElementById("record-time").value;
+
+      const employee = state.employees.find(item => item.id === employeeId);
+      if (!employee) {
+        showToast("Funcionário não encontrado.", "error");
+        return;
+      }
+
+      const dateObject = new Date(`${date}T${time}:00`);
+      if (isNaN(dateObject.getTime())) {
+        showToast("Data ou horário inválido.", "error");
+        return;
+      }
+
+      try {
+        const timestamp = Timestamp.fromDate(dateObject);
+        if (recordId) {
+          const oldRecord = state.records.find(record => record.id === recordId);
+          await updateDoc(doc(db, "records", recordId), {
+            employeeId: employee.id,
+            userId: employee.id,
+            userName: employee.name,
+            cargo: employee.cargo || "",
+            setor: employee.setor || "",
+            code: employee.code,
+            type,
+            timestamp
+          });
+          await addAudit(`Editou registro de ${employee.name}.`);
+          showToast("Registro atualizado com sucesso.");
+        } else {
+          await addDoc(collection(db, "records"), {
+            employeeId: employee.id,
+            userId: employee.id,
+            userName: employee.name,
+            cargo: employee.cargo || "",
+            setor: employee.setor || "",
+            code: employee.code,
+            type,
+            timestamp,
+            source: "admin"
+          });
+          await addAudit(`Adicionou manualmente ${type} para ${employee.name}.`);
+          showToast("Ponto adicionado com sucesso.");
+        }
+        closeModal();
+      } catch (error) {
+        console.error(error);
+        showToast("Não foi possível salvar o registro.", "error");
+      }
+    }
+
+    async function quickEditDayTime(employeeId, type) {
+      const record = state.records.find(item => item.userId === employeeId && item.type === type && getRecordDate(item.timestamp) === getLocalDateKey());
+      if (record) openRecordEditor(record.id);
+      else openRecordEditor(null, { userId: employeeId, type, date: getLocalDateKey(), time: getLocalTime() });
+    }
+
+    async function deleteRecord(id) {
+      const record = state.records.find(item => item.id === id);
+      if (!record) return;
+      if (!confirm(`Excluir o registro de ${record.userName} (${record.type})?`)) return;
+
+      try {
+        await deleteDoc(doc(db, "records", id));
+        await addAudit(`Excluiu registro de ${record.userName} (${record.type}).`);
+        showToast("Registro excluído.");
+      } catch (error) {
+        console.error(error);
+        showToast("Não foi possível excluir o registro.", "error");
+      }
+    }
+
+    async function addAudit(description) {
+      if (!auth.currentUser) return;
+      await addDoc(collection(db, "audit"), {
+        adminUid: auth.currentUser.uid,
+        adminName: getCurrentAdminName(),
+        description,
+        timestamp: Timestamp.now()
+      });
+    }
+
+    async function saveCompanySettings(event) {
+      event.preventDefault();
+      const companyName = document.getElementById("set-company-name").value.trim();
+      const cnpj = document.getElementById("set-cnpj").value.trim();
+      const timezone = document.getElementById("set-timezone").value.trim();
+      const tolerance = Number(document.getElementById("set-tolerance").value) || 0;
+
+      try {
+        await setDoc(doc(db, "settings", "general"), { companyName, cnpj, timezone, tolerance, updatedAt: Timestamp.now() }, { merge: true });
+        await addAudit(`Atualizou as configurações da empresa.`);
+        showToast("Configurações salvas.");
+      } catch (error) {
+        console.error(error);
+        showToast("Não foi possível salvar as configurações.", "error");
+      }
+    }
+
+    function exportBackup() {
+      const backup = {
+        version: "3.0.0",
+        exportedAt: new Date().toISOString(),
+        employees: state.employees,
+        records: state.records,
+        audit: state.audit,
+        settings: state.settings
+      };
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `backup-lgoncalves-${getLocalDateKey()}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast("Backup baixado com sucesso.");
+    }
+
+    async function importBackup(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!data.employees || !data.records) throw new Error("BACKUP_INVALID");
+
+        if (!confirm("Restaurar este backup?\n\nOs dados existentes serão atualizados com os dados do arquivo.")) return;
+
+        const batch = writeBatch(db);
+        for (const emp of data.employees) {
+          batch.set(doc(db, "employees", emp.code || emp.id), emp, { merge: true });
+        }
+        for (const rec of data.records) {
+          const recData = { ...rec, timestamp: rec.timestamp ? Timestamp.fromDate(new Date(rec.timestamp)) : Timestamp.now() };
+          batch.set(doc(db, "records", rec.id || generateId()), recData, { merge: true });
+        }
+        await batch.commit();
+        showToast("Backup restaurado com sucesso.");
+      } catch (error) {
+        console.error(error);
+        showToast("Arquivo de backup inválido.", "error");
+      } finally {
+        event.target.value = "";
+      }
+    }
+
+    function generatePDF(type) {
+      const oldDate = filterDate;
+      const oldMonth = reportMonth;
+      if (type === "day") filterDate = filterDate || getLocalDateKey();
+      if (type === "month") { filterDate = ""; reportMonth = reportMonth || getLocalMonth(); }
+      render();
+      setTimeout(() => {
+        window.print();
+        setTimeout(() => { filterDate = oldDate; reportMonth = oldMonth; render(); }, 500);
+      }, 250);
+    }
+
+    function closeModal() {
+      const modal = document.getElementById("modal-container");
+      if (modal) modal.remove();
+    }
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") closeModal();
+    });
+
+    function updateClock() {
+      const text = new Date().toLocaleString("pt-BR");
+      const terminalClock = document.getElementById("terminal-clock");
+      const adminClock = document.getElementById("admin-clock");
+      if (terminalClock) terminalClock.textContent = text;
+      if (adminClock) adminClock.textContent = text;
+    }
+
+    setInterval(updateClock, 1000);
+
+    function render() {
+      const app = document.getElementById("app");
+      if (!app) return;
+
+      if (currentRoute === "terminal") {
+        app.innerHTML = renderTerminalPage();
+        updateClock();
+        setTimeout(() => {
+          const input = document.getElementById("punch-code-input");
+          if (input) input.focus();
+        }, 100);
+        return;
+      }
+
+      if (currentRoute === "admin-login") {
+        app.innerHTML = renderAdminLoginPage();
+        return;
+      }
+
+      if (currentRoute === "admin-dashboard") {
+        if (!state.admin) {
+          currentRoute = "admin-login";
+          app.innerHTML = renderAdminLoginPage();
+          return;
+        }
+        app.innerHTML = renderAdminDashboardView();
+        updateClock();
+        return;
+      }
+
+      app.innerHTML = renderTerminalPage();
+    }
+
+    startSettingsListener();
+    startEmployeesListener();
+    render();
+  </script>
+
+</body>
+</html>
